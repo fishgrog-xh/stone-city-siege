@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>石阵围城 · 11x11</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <button class="rule-btn" id="rule-btn">📖 规则</button>
+
+  <div id="rule-modal" class="modal">
+    <div class="modal-content">
+      <span class="close-btn" id="close-modal">&times;</span>
+      <h2>《石阵围城》规则精简版</h2>
+      <ul>
+        <li><strong>目标</strong>：猜中对方国王位置，或使对方无法移动3步。</li>
+        <li><strong>初设</strong>：双方秘密设置国王 → 先手放3个石头（米字方向） → 后手移动3步+放3石头。</li>
+        <li><strong>标准回合</strong>：移动3步（十字相邻，不可经过石头） → 放置3个石头（必须在国王米字方向，不能放在己方国王上）。</li>
+        <li><strong>获胜</strong>：石头压在对方国王上（主动定位），或对方回合开始时十字相邻全为石头/边界（困毙）。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 重赛确认弹窗 -->
+  <div id="rematch-modal" class="modal">
+    <div class="modal-content rematch-content">
+      <h2>🏆 游戏结束</h2>
+      <p id="rematch-message"></p>
+      <div class="rematch-buttons">
+        <button id="rematch-yes" class="primary-btn">再来一局</button>
+        <button id="rematch-no" class="secondary-btn">暂不</button>
+      </div>
+      <p id="rematch-status" style="margin-top: 16px; font-style: italic;"></p>
+    </div>
+  </div>
+
+  <div class="game-container">
+    <div class="header">
+      <h1>🪨 石阵围城</h1>
+      <div class="room-panel">
+        <input type="text" id="room-id-input" placeholder="房间号" maxlength="10" />
+        <button id="join-btn" class="primary-btn">加入 / 创建</button>
+        <span id="status-message" class="status-badge"></span>
+      </div>
+    </div>
+
+    <div class="board-wrapper">
+      <canvas id="board-canvas" width="600" height="600"></canvas>
+      <div class="game-state-bar">
+        <span id="turn-indicator" class="turn-badge">⚔️ 等待开始</span>
+        <span id="phase-indicator" class="phase-badge"></span>
+      </div>
+    </div>
+
+    <div class="action-bar">
+      <div class="info-card" id="king-coord-display">
+        <span class="icon">👑</span> 国王：未设置
+      </div>
+      <div class="info-card" id="move-counter">
+        <span class="icon">🚶</span> 步数：0/3
+      </div>
+      <button id="end-move-btn" class="action-btn" disabled>✅ 完成移动</button>
+      <div class="info-card" id="stone-counter">
+        <span class="icon">🪨</span> 石头：0/3
+      </div>
+    </div>
+
+    <div id="message-bar" class="message-bar">
+      <span id="debug-text">欢迎来到石阵围城</span>
+    </div>
+  </div>
+
+  <script>
+    (function(){
+      const BOARD_SIZE = 11;
+      const socket = io();
+      
+      const canvas = document.getElementById('board-canvas');
+      const ctx = canvas.getContext('2d');
+      const cellSize = canvas.width / BOARD_SIZE;
+      
+      let roomId = null;
+      let myRole = null;
+      let gameActive = false;
+      let currentPhase = '';
+      let currentTurn = null;
+      let stones = Array(BOARD_SIZE).fill().map(() => Array(BOARD_SIZE).fill(null));
+      let myKing = { row: -1, col: -1 };
+      let opponentKing = null;
+      let myMoveRemaining = 0;
+      let myStoneRemaining = 0;
+      let movePath = [];
+      let startKingPos = null;
+      let hoverRow = -1, hoverCol = -1;
+      let gameOverData = null;       // 暂存结束数据
+      let rematchVoted = false;
+      
+      // DOM 元素
+      const joinBtn = document.getElementById('join-btn');
+      const roomIdInput = document.getElementById('room-id-input');
+      const statusMsg = document.getElementById('status-message');
+      const turnIndicator = document.getElementById('turn-indicator');
+      const phaseIndicator = document.getElementById('phase-indicator');
+      const kingCoordDisplay = document.getElementById('king-coord-display');
+      const moveCounter = document.getElementById('move-counter');
+      const stoneCounter = document.getElementById('stone-counter');
+      const endMoveBtn = document.getElementById('end-move-btn');
+      const debugText = document.getElementById('debug-text');
+      
+      // 模态框
+      const ruleModal = document.getElementById('rule-modal');
+      const rematchModal = document.getElementById('rematch-modal');
+      const rematchMsg = document.getElementById('rematch-message');
+      const rematchStatus = document.getElementById('rematch-status');
+      const rematchYes = document.getElementById('rematch-yes');
+      const rematchNo = document.getElementById('rematch-no');
+      
+      document.getElementById('rule-btn').onclick = () => ruleModal.style.display = 'block';
+      document.getElementById('close-modal').onclick = () => ruleModal.style.display = 'none';
+      window.onclick = (e) => { if (e.target == ruleModal) ruleModal.style.display = 'none'; };
+      
+      // 重赛弹窗逻辑
+      rematchYes.onclick = () => {
+        if (!rematchVoted) {
+          socket.emit('rematch-vote', { roomId });
+          rematchVoted = true;
+          rematchYes.disabled = true;
+          rematchStatus.textContent = '已发送请求，等待对手...';
+        }
+      };
+      rematchNo.onclick = () => {
+        rematchModal.style.display = 'none';
+        rematchVoted = false;
+        rematchYes.disabled = false;
+        gameOverData = null;
+      };
+      
+      function log(msg) {
+        debugText.textContent = msg;
+        console.log(msg);
+      }
+
+      function isInStarLine(kRow, kCol, row, col) {
+        const dr = row - kRow;
+        const dc = col - kCol;
+        return (dr === 0) || (dc === 0) || (Math.abs(dr) === Math.abs(dc));
+      }
+
+      function isValidMoveTarget(row, col) {
+        if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return false;
+        if (stones[row][col] !== null) return false;
+        const dr = Math.abs(row - myKing.row);
+        const dc = Math.abs(col - myKing.col);
+        return (dr === 1 && dc === 0) || (dr === 0 && dc === 1);
+      }
+
+      function isValidPlaceTarget(row, col) {
+        if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return false;
+        if (stones[row][col] !== null) return false;
+        if (myKing.row === -1) return false;
+        if (myKing.row === row && myKing.col === col) return false;
+        return isInStarLine(myKing.row, myKing.col, row, col);
+      }
+      
+      function isValidKingTarget(row, col) {
+        if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return false;
+        return stones[row][col] === null;
+      }
+
+      function drawBoard() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.fillStyle = '#DEB887';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        ctx.lineWidth = 1.8;
+        ctx.strokeStyle = '#5D3A1A';
+        for (let i = 0; i < BOARD_SIZE; i++) {
+          ctx.beginPath();
+          ctx.moveTo(i * cellSize + cellSize/2, cellSize/2);
+          ctx.lineTo(i * cellSize + cellSize/2, canvas.height - cellSize/2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(cellSize/2, i * cellSize + cellSize/2);
+          ctx.lineTo(canvas.width - cellSize/2, i * cellSize + cellSize/2);
+          ctx.stroke();
+        }
+        
+        const starPositions = [[2,2], [2,8], [8,2], [8,8], [5,5], [2,5], [8,5], [5,2], [5,8]];
+        ctx.fillStyle = '#5D3A1A';
+        starPositions.forEach(([r, c]) => {
+          ctx.beginPath();
+          ctx.arc(c * cellSize + cellSize/2, r * cellSize + cellSize/2, cellSize*0.08, 0, 2*Math.PI);
+          ctx.fill();
+        });
+        
+        for (let r = 0; r < BOARD_SIZE; r++) {
+          for (let c = 0; c < BOARD_SIZE; c++) {
+            const owner = stones[r][c];
+            if (!owner) continue;
+            const x = c * cellSize + cellSize/2;
+            const y = r * cellSize + cellSize/2;
+            const gradient = ctx.createRadialGradient(x-4, y-4, 2, x, y, cellSize*0.4);
+            if (owner === 'host') {
+              gradient.addColorStop(0, '#4A6A8A');
+              gradient.addColorStop(1, '#1E2F47');
+            } else {
+              gradient.addColorStop(0, '#B87333');
+              gradient.addColorStop(1, '#6B3E1B');
+            }
+            ctx.beginPath();
+            ctx.arc(x, y, cellSize*0.38, 0, 2*Math.PI);
+            ctx.fillStyle = gradient;
+            ctx.shadowColor = '#00000040';
+            ctx.shadowBlur = 8;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = '#D2B48C';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(x-4, y-4, 4, 0, 2*Math.PI);
+            ctx.fillStyle = '#FFFFFF30';
+            ctx.fill();
+          }
+        }
+        
+        // 悬停预览：设置国王阶段
+        if (gameActive && currentPhase === 'set-king' && myKing.row === -1) {
+          if (hoverRow !== -1 && hoverCol !== -1 && isValidKingTarget(hoverRow, hoverCol)) {
+            const x = hoverCol * cellSize + cellSize/2;
+            const y = hoverRow * cellSize + cellSize/2;
+            ctx.shadowColor = '#FFD700';
+            ctx.shadowBlur = 15;
+            ctx.globalAlpha = 0.6;
+            ctx.beginPath();
+            ctx.arc(x, y, cellSize*0.28, 0, 2*Math.PI);
+            ctx.fillStyle = '#FFB347';
+            ctx.fill();
+            ctx.font = `bold ${cellSize*0.45}px "Segoe UI", Arial`;
+            ctx.fillStyle = '#DAA520';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('👑', x, y-2);
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1.0;
+          }
+        }
+        
+        // 悬停预览：移动阶段
+        if (gameActive && currentTurn === myRole && currentPhase.includes('move') && myMoveRemaining > 0) {
+          if (hoverRow !== -1 && hoverCol !== -1 && isValidMoveTarget(hoverRow, hoverCol)) {
+            const x = hoverCol * cellSize + cellSize/2;
+            const y = hoverRow * cellSize + cellSize/2;
+            ctx.shadowColor = '#FFD700';
+            ctx.shadowBlur = 15;
+            ctx.globalAlpha = 0.7;
+            ctx.beginPath();
+            ctx.arc(x, y, cellSize*0.28, 0, 2*Math.PI);
+            ctx.fillStyle = '#FFB347';
+            ctx.fill();
+            ctx.font = `bold ${cellSize*0.45}px "Segoe UI", Arial`;
+            ctx.fillStyle = '#DAA520';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('👑', x, y-2);
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1.0;
+          }
+        }
+        
+        // 悬停预览：放置阶段
+        if (gameActive && currentTurn === myRole && (currentPhase.includes('stones') || currentPhase.includes('place')) && myStoneRemaining > 0) {
+          if (hoverRow !== -1 && hoverCol !== -1 && isValidPlaceTarget(hoverRow, hoverCol)) {
+            const x = hoverCol * cellSize + cellSize/2;
+            const y = hoverRow * cellSize + cellSize/2;
+            ctx.shadowColor = '#AAAAAA';
+            ctx.shadowBlur = 12;
+            ctx.globalAlpha = 0.6;
+            ctx.beginPath();
+            ctx.arc(x, y, cellSize*0.32, 0, 2*Math.PI);
+            ctx.fillStyle = '#A0A0A0';
+            ctx.fill();
+            ctx.strokeStyle = '#505050';
+            ctx.lineWidth = 2.5;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.globalAlpha = 1.0;
+          }
+        }
+        
+        // 对手国王
+        if (opponentKing) {
+          const { row, col } = opponentKing;
+          const x = col * cellSize + cellSize/2;
+          const y = row * cellSize + cellSize/2;
+          ctx.shadowColor = '#8B0000';
+          ctx.shadowBlur = 18;
+          ctx.beginPath();
+          ctx.arc(x, y, cellSize*0.28, 0, 2*Math.PI);
+          ctx.fillStyle = '#B22222';
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.font = `${cellSize*0.5}px "Segoe UI", Arial`;
+          ctx.fillStyle = '#FFD700';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('💀', x, y-2);
+        }
+        
+        // 己方国王
+        if (myKing.row !== -1 && myKing.col !== -1) {
+          const x = myKing.col * cellSize + cellSize/2;
+          const y = myKing.row * cellSize + cellSize/2;
+          ctx.shadowColor = '#FFD700';
+          ctx.shadowBlur = 20;
+          ctx.beginPath();
+          ctx.arc(x, y, cellSize*0.24, 0, 2*Math.PI);
+          ctx.fillStyle = '#FFA500';
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.font = `${cellSize*0.45}px "Segoe UI", Arial`;
+          ctx.fillStyle = '#FFD700';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('👑', x, y-2);
+        }
+      }
+
+      canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const canvasX = (e.clientX - rect.left) * scaleX;
+        const canvasY = (e.clientY - rect.top) * scaleY;
+        const col = Math.floor(canvasX / cellSize);
+        const row = Math.floor(canvasY / cellSize);
+        if (row >= 0 && row < BOARD_SIZE && col >= 0 && col < BOARD_SIZE) {
+          hoverRow = row;
+          hoverCol = col;
+        } else {
+          hoverRow = hoverCol = -1;
+        }
+        drawBoard();
+      });
+
+      canvas.addEventListener('mouseleave', () => {
+        hoverRow = hoverCol = -1;
+        drawBoard();
+      });
+
+      canvas.addEventListener('click', (e) => {
+        if (!gameActive) { log('⏳ 游戏未开始'); return; }
+        
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const canvasX = (e.clientX - rect.left) * scaleX;
+        const canvasY = (e.clientY - rect.top) * scaleY;
+        const col = Math.floor(canvasX / cellSize);
+        const row = Math.floor(canvasY / cellSize);
+        if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
+        
+        if (currentPhase === 'set-king') {
+          if (myKing.row !== -1) { log('⚠️ 你已经设置过国王了'); return; }
+          if (!isValidKingTarget(row, col)) { log('❌ 此处不能放置国王'); return; }
+          myKing = { row, col };
+          kingCoordDisplay.innerHTML = `<span class="icon">👑</span> 国王：${String.fromCharCode(65+col)}${row+1}`;
+          socket.emit('set-king', { roomId, row, col });
+          log('✅ 国王已设置，等待对手...');
+          drawBoard();
+          return;
+        }
+        
+        if (currentTurn !== myRole) { log('⏳ 还没轮到你'); return; }
+        
+        if (currentPhase.includes('move')) {
+          if (myMoveRemaining <= 0) { log('🚫 步数已用完'); return; }
+          if (!isValidMoveTarget(row, col)) { log('❌ 只能移动到十字相邻的空格'); return; }
+          myKing = { row, col };
+          movePath.push({ row, col });
+          myMoveRemaining--;
+          moveCounter.innerHTML = `<span class="icon">🚶</span> 步数：${myMoveRemaining}/3`;
+          kingCoordDisplay.innerHTML = `<span class="icon">👑</span> 国王：${String.fromCharCode(65+col)}${row+1}`;
+          drawBoard();
+          if (myMoveRemaining === 0) {
+            endMoveBtn.disabled = false;
+            log('✅ 已走满3步，点击“完成移动”');
+          } else {
+            log(`🚶 还需走 ${myMoveRemaining} 步`);
+          }
+        } else if (currentPhase.includes('stones') || currentPhase.includes('place')) {
+          if (!isValidPlaceTarget(row, col)) {
+            if (stones[row][col] !== null) log('❌ 此处已有石头');
+            else if (myKing.row === row && myKing.col === col) log('❌ 不能放在己方国王上');
+            else log('❌ 必须放在国王米字方向的空格上');
+            return;
+          }
+          socket.emit('place-stone', { roomId, row, col });
+        }
+      });
+
+      endMoveBtn.addEventListener('click', () => {
+        if (myMoveRemaining > 0) { log(`⚠️ 还需走${myMoveRemaining}步`); return; }
+        if (!startKingPos) { log('⚠️ 移动起点异常'); return; }
+        const fullPath = [startKingPos, ...movePath];
+        socket.emit('finish-move', { roomId, finalRow: myKing.row, finalCol: myKing.col, path: fullPath });
+        endMoveBtn.disabled = true;
+        movePath = [];
+      });
+
+      // Socket 事件
+      socket.on('connect', () => log('🟢 已连接'));
+
+      socket.on('room-joined', (data) => {
+        roomId = data.roomId;
+        myRole = data.role;
+        statusMsg.textContent = `房间 ${roomId} · ${myRole==='host'?'先手':'后手'}`;
+        log(`👋 加入房间 ${roomId}`);
+      });
+
+      socket.on('waiting-for-opponent', () => {
+        statusMsg.textContent = '等待对手...';
+        gameActive = false;
+      });
+
+      socket.on('room-full', () => alert('房间已满'));
+
+      socket.on('phase-change', (data) => {
+        currentPhase = data.phase;
+        currentTurn = data.currentTurn;
+        if (data.stones) stones = data.stones;
+        gameActive = true;
+        
+        if (data.phase === 'set-king') {
+          opponentKing = null;
+          myKing = { row: -1, col: -1 };
+          kingCoordDisplay.innerHTML = `<span class="icon">👑</span> 国王：未设置`;
+          stoneCounter.innerHTML = `<span class="icon">🪨</span> 石头：-/3`;
+          moveCounter.innerHTML = `<span class="icon">🚶</span> 步数：-/3`;
+          movePath = [];
+          startKingPos = null;
+          rematchVoted = false;
+          rematchModal.style.display = 'none';
+        }
+        
+        if (data.message) log(`📢 ${data.message}`);
+        
+        if (currentPhase.includes('move')) {
+          if (currentTurn === myRole) {
+            myMoveRemaining = data.moveCount || 3;
+            startKingPos = { row: myKing.row, col: myKing.col };
+            movePath = [];
+            moveCounter.innerHTML = `<span class="icon">🚶</span> 步数：${myMoveRemaining}/3`;
+            endMoveBtn.disabled = true;
+          } else {
+            moveCounter.innerHTML = `<span class="icon">🚶</span> 步数：-/3`;
+          }
+        } else if (currentPhase.includes('stones') || currentPhase.includes('place')) {
+          if (currentTurn === myRole) {
+            myStoneRemaining = data.stoneCount || 3;
+            stoneCounter.innerHTML = `<span class="icon">🪨</span> 石头：${myStoneRemaining}/3`;
+          } else {
+            stoneCounter.innerHTML = `<span class="icon">🪨</span> 石头：-/3`;
+          }
+        }
+        
+        updateUI();
+        drawBoard();
+      });
+
+      socket.on('stone-placed', (data) => {
+        stones = data.stones;
+        drawBoard();
+        if (data.placedBy === myRole) {
+          myStoneRemaining--;
+          stoneCounter.innerHTML = `<span class="icon">🪨</span> 石头：${myStoneRemaining}/3`;
+        }
+        updateUI();
+      });
+
+      socket.on('stone-count-update', (data) => {
+        if (data.role === myRole) {
+          myStoneRemaining = data.remaining;
+          stoneCounter.innerHTML = `<span class="icon">🪨</span> 石头：${myStoneRemaining}/3`;
+        }
+      });
+
+      socket.on('move-finished', (data) => {
+        currentPhase = data.phase;
+        currentTurn = data.currentTurn;
+        if (data.player === myRole) {
+          myStoneRemaining = data.stoneCount;
+          stoneCounter.innerHTML = `<span class="icon">🪨</span> 石头：${myStoneRemaining}/3`;
+          movePath = [];
+          startKingPos = null;
+          log('✅ 移动完成，现在放置石头');
+        } else {
+          log('👀 对手移动完成');
+        }
+        drawBoard();
+        updateUI();
+      });
+
+      socket.on('king-set-confirm', (data) => {
+        myKing = data;
+        kingCoordDisplay.innerHTML = `<span class="icon">👑</span> 国王：${String.fromCharCode(65+data.col)}${data.row+1}`;
+        log('🔒 国王已记录');
+      });
+
+      socket.on('opponent-king-set', () => {
+        if (myKing.row !== -1) log('🎮 双方已设置，即将开始');
+        else log('⏳ 对手已设置');
+      });
+
+      socket.on('game-over', (data) => {
+        gameActive = false;
+        gameOverData = data;
+        const isWin = data.winner === myRole;
+        const msg = `${isWin ? '🎉 你赢了！' : '😔 你输了。'} ${data.reason || ''}`;
+        
+        if (data.kingPositions) {
+          const oppRole = myRole === 'host' ? 'guest' : 'host';
+          opponentKing = data.kingPositions[oppRole];
+          drawBoard();
+          log(`📍 对方国王位于 ${String.fromCharCode(65+opponentKing.col)}${opponentKing.row+1}`);
+        }
+        
+        // 显示重赛弹窗
+        rematchMsg.textContent = msg;
+        rematchStatus.textContent = '';
+        rematchYes.disabled = false;
+        rematchVoted = false;
+        rematchModal.style.display = 'block';
+      });
+      
+      socket.on('rematch-voted', ({ role }) => {
+        // 自己投票确认
+      });
+      
+      socket.on('opponent-rematch-vote', () => {
+        rematchStatus.textContent = '对手也想再来一局！';
+      });
+
+      socket.on('opponent-left', () => {
+        gameActive = false;
+        alert('对手离开了房间');
+        log('🚪 对手离开');
+      });
+
+      socket.on('error-message', (msg) => alert(msg));
+
+      function updateUI() {
+        if (!gameActive) return;
+        if (currentPhase === 'set-king') {
+          turnIndicator.textContent = '👥 设置国王';
+          phaseIndicator.textContent = myKing.row === -1 ? '点击棋盘放置国王' : '等待对手';
+        } else {
+          turnIndicator.textContent = currentTurn === myRole ? '✨ 你的回合' : '⏳ 对手回合';
+          phaseIndicator.textContent = currentPhase;
+        }
+      }
+
+      joinBtn.addEventListener('click', () => {
+        const rid = roomIdInput.value.trim();
+        if (!rid) return alert('请输入房间号');
+        socket.emit('join-room', rid);
+        statusMsg.textContent = `正在连接 ${rid}...`;
+      });
+
+      drawBoard();
+      log('🪨 欢迎！');
+    })();
+  </script>
+</body>
+</html>
