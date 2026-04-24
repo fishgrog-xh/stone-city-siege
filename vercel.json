@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/socket.io/:path*",
+      "destination": "https://stone-city-siege-production-b2c3.up.railway.app/socket.io/:path*"
+    }
+  ]
+}
