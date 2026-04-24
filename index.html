@@ -13,13 +13,58 @@
   <div id="rule-modal" class="modal">
     <div class="modal-content">
       <span class="close-btn" id="close-modal">&times;</span>
-      <h2>《石阵围城》规则精简版</h2>
-      <ul>
-        <li><strong>目标</strong>：猜中对方国王位置，或使对方无法移动3步。</li>
-        <li><strong>初设</strong>：双方秘密设置国王 → 先手放3个石头（米字方向） → 后手移动3步+放3石头。</li>
-        <li><strong>标准回合</strong>：移动3步（十字相邻，不可经过石头） → 放置3个石头（必须在国王米字方向，不能放在己方国王上）。</li>
-        <li><strong>获胜</strong>：石头压在对方国王上（主动定位），或对方回合开始时十字相邻全为石头/边界（困毙）。</li>
-      </ul>
+      <h2>《石阵围城》完整规则</h2>
+      <div style="text-align:left; line-height:1.8; font-size:15px;">
+        <h3>🎯 游戏目标</h3>
+        <p>双方各自秘密控制一位<strong>国王</strong>，通过放置<strong>石头</strong>压缩对手的活动空间，同时<strong>从对手的落子规律中推理其国王位置</strong>。率先达成以下任一条件者获胜：</p>
+        <ul>
+          <li><strong>精准定位</strong>：在你的回合放置石头时，石头恰好压在对方国王所在的格子上。</li>
+          <li><strong>十字困毙</strong>：轮到对手回合开始时，其国王的<strong>上、下、左、右四个相邻格</strong>全部被石头或棋盘边界堵死，导致对手无法移动3步。</li>
+        </ul>
+
+        <h3>🏁 游戏准备（初设阶段）</h3>
+        <ol>
+          <li><strong>秘密设置国王</strong>：游戏开始后，双方各自点击棋盘上的一个<strong>空格</strong>，设置己方国王的初始位置。该坐标仅自己可见，双方<strong>可以重叠</strong>。</li>
+          <li><strong>先手放置初始石头</strong>：先手玩家（Host）在自己的国王<strong>米字方向射线</strong>上放置 <strong>3枚</strong> 属于自己的石头。</li>
+          <li><strong>后手首个回合</strong>：
+            <ul>
+              <li><strong>移动阶段</strong>：后手国王必须移动 <strong>恰好3步</strong>（规则见下方）。</li>
+              <li><strong>放置阶段</strong>：移动结束后，在自己的国王新位置的米字方向射线上放置 <strong>3枚</strong> 石头。</li>
+            </ul>
+          </li>
+          <li><strong>进入标准回合</strong>：后手首个回合结束后，游戏正式进入标准回合，由<strong>先手</strong>开始行动。</li>
+        </ol>
+
+        <h3>🔄 标准回合流程</h3>
+        <p>双方轮流进行，每回合必须依次完成两个阶段：</p>
+        <ol>
+          <li><strong>移动阶段</strong>：国王必须移动 <strong>恰好3步</strong>。</li>
+          <li><strong>放置阶段</strong>：移动结束后，在国王新位置的<strong>米字方向射线</strong>上放置 <strong>3枚</strong> 石头。</li>
+        </ol>
+
+        <h3>👣 移动规则</h3>
+        <ul>
+          <li><strong>步数</strong>：每回合必须走满3步，不能少走。</li>
+          <li><strong>方向</strong>：每一步只能移动到<strong>上、下、左、右</strong>四个十字方向相邻的空格（不可斜向）。</li>
+          <li><strong>障碍</strong>：路径中的每一步及终点均不可为<strong>石头</strong>所在格。</li>
+          <li><strong>允许</strong>：移动过程中可以转弯、走回头路，也可以经过或停留在与对方国王相同的格子（重叠）。</li>
+        </ul>
+
+        <h3>🪨 石头放置规则</h3>
+        <ul>
+          <li><strong>米字方向射线</strong>：以国王所在格子为中心，向<strong>上、下、左、右、左上、右上、左下、右下</strong>共8个方向延伸至棋盘边界的直线。</li>
+          <li><strong>放置条件</strong>：石头必须放在<strong>己方国王的米字方向射线</strong>上，且目标格必须是<strong>空格</strong>。</li>
+          <li><strong>不可放置</strong>：不能将石头放在<strong>己方国王</strong>所在的格子上。</li>
+          <li><strong>射线穿透</strong>：即使射线中途已有石头，只要目标格为空且位于射线上，即可放置。</li>
+          <li><strong>胜利触发</strong>：若放置石头的目标格恰好是<strong>对方国王当前所在位置</strong>，则你立即获胜。</li>
+        </ul>
+
+        <h3>🏆 胜负判定补充</h3>
+        <ul>
+          <li>困毙判定发生在<strong>回合开始时</strong>，若你的国王四向被封死，则对手立即获胜，你本回合不能再行动。</li>
+          <li>游戏结束后，双方将看到对方国王的位置，并可选择<strong>“再来一局”</strong>。</li>
+        </ul>
+      </div>
     </div>
   </div>
 
