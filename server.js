@@ -4,7 +4,13 @@ const socketIo = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, { cors: { origin: "*" } });
+// 原代码：const io = socketIo(server, { cors: { origin: "*" } });
+const io = socketIo(server, {
+  cors: {
+    origin: "https://stone-city-siege-2ezw.vercel.app", // 替换为你真实的 Vercel 地址
+    methods: ["GET", "POST"]
+  }
+});
 
 app.use(express.static(__dirname));
 app.get('/', (req, res) => res.sendFile(__dirname + '/index.html'));
