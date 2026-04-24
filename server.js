@@ -7,7 +7,7 @@ const server = http.createServer(app);
 // 原代码：const io = socketIo(server, { cors: { origin: "*" } });
 const io = socketIo(server, {
   cors: {
-    origin: "https://stone-city-siege-2ezw.vercel.app", // 替换为你真实的 Vercel 地址
+    origin: "*",
     methods: ["GET", "POST"]
   }
 });
